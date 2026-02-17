@@ -5,7 +5,9 @@ import subprocess
 import winreg
 from PIL import Image
 from tkinter import filedialog, messagebox
-import webbrowser  # 用于打开网页链接
+import webbrowser
+import requests
+from io import BytesIO
 
 # 设置外观模式和颜色主题
 ctk.set_appearance_mode("Light")
@@ -135,41 +137,51 @@ class NOSLauncher(ctk.CTk):
 
     def load_logo(self):
         try:
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            png_path = os.path.join(current_dir, "re", "nos.png")
+            # 网络图片URL
+            logo_url = "https://ytt0.top/NOS_Launcher/re/nos.png"
             
-            if os.path.exists(png_path):
-                pil_image = Image.open(png_path)
-                
-                max_width = 400
-                original_width, original_height = pil_image.size
-                
-                if original_width > max_width:
-                    scale_ratio = max_width / original_width
-                    new_height = int(original_height * scale_ratio)
-                    new_width = max_width
-                else:
-                    new_width = original_width
-                    new_height = original_height
-                
-                logo_image = ctk.CTkImage(
-                    light_image=pil_image,
-                    dark_image=pil_image,
-                    size=(new_width, new_height)
-                )
-                
-                self.logo_label = ctk.CTkLabel(
-                    master=self.logo_frame,
-                    image=logo_image,
-                    text=""
-                )
-                self.logo_label.grid(row=0, column=0, pady=20)
-                self.logo_image = logo_image
+            # 发送GET请求获取图片
+            response = requests.get(logo_url, timeout=5)
+            response.raise_for_status()  # 检查请求是否成功（如404、500等错误）
+            
+            # 将响应内容转换为PIL Image对象
+            pil_image = Image.open(BytesIO(response.content))
+            
+            # 缩放处理
+            max_width = 400
+            original_width, original_height = pil_image.size
+            
+            if original_width > max_width:
+                scale_ratio = max_width / original_width
+                new_height = int(original_height * scale_ratio)
+                new_width = max_width
             else:
-                self.show_text_logo("NoS Launcher")
-                
+                new_width = original_width
+                new_height = original_height
+            
+            # 创建CTkImage
+            logo_image = ctk.CTkImage(
+                light_image=pil_image,
+                dark_image=pil_image,
+                size=(new_width, new_height)
+            )
+            
+            # 显示Logo
+            self.logo_label = ctk.CTkLabel(
+                master=self.logo_frame,
+                image=logo_image,
+                text=""
+            )
+            self.logo_label.grid(row=0, column=0, pady=20)
+            self.logo_image = logo_image
+            
+        except requests.exceptions.RequestException as e:
+            # 网络请求失败（如超时、404等）
+            print(f"从网络加载 Logo 失败: {e}")
+            self.show_text_logo("NoS Launcher")
         except Exception as e:
-            print(f"加载 Logo 失败: {e}")
+            # 其他错误（如图片格式错误）
+            print(f"处理 Logo 时出错: {e}")
             self.show_text_logo("NoS Launcher")
 
     def show_text_logo(self, text):
@@ -293,9 +305,9 @@ class NOSLauncher(ctk.CTk):
                 if os.path.isdir(full_path):
                     exe_path = os.path.join(full_path, "Among Us.exe")
                     
-                    # --- 新增：检查 Addons、Presets 文件夹和 NebulaLog.txt 文件 ---
+                    # 检查 Addons、Presets 文件夹和 NebulaLog.txt 文件
                     addons_path = os.path.join(full_path, "Addons")
-                    presets_path = os.path.join(full_path, "Presets") # 注意：根据上下文使用Presets，您提到的Presents如果是拼写错误则此处不改
+                    presets_path = os.path.join(full_path, "Presets")
                     log_path = os.path.join(full_path, "NebulaLog.txt")
 
                     # 只有当 exe、Addons、Presets、NebulaLog.txt 全部存在时，才视为有效版本
