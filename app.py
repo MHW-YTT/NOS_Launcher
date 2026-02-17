@@ -16,7 +16,7 @@ class NOSLauncher(ctk.CTk):
         super().__init__()
 
         # 配置窗口
-        self.title("NOS Launcher")
+        self.title("NoS Launcher")
         self.geometry("600x550") 
         self.minsize(500, 450)
         
@@ -51,7 +51,7 @@ class NOSLauncher(ctk.CTk):
         self.main_frame.grid_rowconfigure((0,1,2,3,4,5,6), weight=1)
 
         # 1. 标题
-        self.label_title = ctk.CTkLabel(master=self.main_frame, text="欢迎使用 NOS Launcher", font=("Microsoft YaHei", 20, "bold"), text_color="#ffffff")
+        self.label_title = ctk.CTkLabel(master=self.main_frame, text="欢迎使用 NoS Launcher", font=("Microsoft YaHei", 20, "bold"), text_color="#ffffff")
         self.label_title.grid(row=0, column=0, pady=(30, 10))
 
         # 2. 版本选择区域
@@ -124,7 +124,7 @@ class NOSLauncher(ctk.CTk):
         # 7. 版本号 (行号调整)
         self.version_label_bottom = ctk.CTkLabel(
             master=self.main_frame,
-            text="NOS Launcher v1.0.0",
+            text="NoS Launcher v1.0.0",
             font=("Microsoft YaHei", 10),
             text_color="#aaaaaa"
         )
@@ -166,11 +166,11 @@ class NOSLauncher(ctk.CTk):
                 self.logo_label.grid(row=0, column=0, pady=20)
                 self.logo_image = logo_image
             else:
-                self.show_text_logo("NOS Launcher")
+                self.show_text_logo("NoS Launcher")
                 
         except Exception as e:
             print(f"加载 Logo 失败: {e}")
-            self.show_text_logo("NOS Launcher")
+            self.show_text_logo("NoS Launcher")
 
     def show_text_logo(self, text):
         self.logo_label = ctk.CTkLabel(
@@ -243,7 +243,7 @@ class NOSLauncher(ctk.CTk):
         about_frame = self.tabview.tab("关于")
         about_frame.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(about_frame, text="关于 NOS Launcher", font=("Microsoft YaHei", 18, "bold")).grid(row=0, column=0, pady=20)
+        ctk.CTkLabel(about_frame, text="关于 NoS Launcher", font=("Microsoft YaHei", 18, "bold")).grid(row=0, column=0, pady=20)
         ctk.CTkLabel(about_frame, text="绿林Greenwoo制作", font=("Microsoft YaHei", 16, "bold")).grid(row=1, column=0, pady=10)
         
         link_label = ctk.CTkLabel(
