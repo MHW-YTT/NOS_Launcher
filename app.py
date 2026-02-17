@@ -392,11 +392,14 @@ class NOSLauncher(ctk.CTk):
             return
             
         addons_path = os.path.join(self.game_root_path, selected_version, "Addons")
-        # 因为扫描逻辑已经保证文件夹存在，这里直接打开
-        try:
-            subprocess.Popen(f'explorer "{addons_path}"')
-        except Exception as e:
-            messagebox.showerror("错误", f"无法打开文件夹：\n{e}")
+        # 使用os.startfile直接打开文件夹（更可靠）
+        if os.path.isdir(addons_path):
+            try:
+                os.startfile(addons_path)
+            except Exception as e:
+                messagebox.showerror("错误", f"无法打开文件夹：\n{e}")
+        else:
+            messagebox.showwarning("提示", f"插件文件夹不存在：\n{addons_path}")
 
     def open_presets_folder(self):
         """打开预设文件夹"""
@@ -406,11 +409,14 @@ class NOSLauncher(ctk.CTk):
             return
             
         presets_path = os.path.join(self.game_root_path, selected_version, "Presets")
-        # 因为扫描逻辑已经保证文件夹存在，这里直接打开
-        try:
-            subprocess.Popen(f'explorer "{presets_path}"')
-        except Exception as e:
-            messagebox.showerror("错误", f"无法打开文件夹：\n{e}")
+        # 使用os.startfile直接打开文件夹（更可靠）
+        if os.path.isdir(presets_path):
+            try:
+                os.startfile(presets_path)
+            except Exception as e:
+                messagebox.showerror("错误", f"无法打开文件夹：\n{e}")
+        else:
+            messagebox.showwarning("提示", f"预设文件夹不存在：\n{presets_path}")
 
 if __name__ == "__main__":
     app = NOSLauncher()
