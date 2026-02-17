@@ -5,6 +5,7 @@ import subprocess
 import winreg
 from PIL import Image
 from tkinter import filedialog, messagebox
+import webbrowser  # 用于打开网页链接
 
 # 设置外观模式和颜色主题
 ctk.set_appearance_mode("Light")
@@ -47,7 +48,7 @@ class NOSLauncher(ctk.CTk):
         self.main_frame.grid(row=1, column=0, padx=20, pady=(5, 20), sticky="nsew")
         
         self.main_frame.grid_columnconfigure(0, weight=1)
-        self.main_frame.grid_rowconfigure((0,1,2,3,4,5,6), weight=1)  # --- 修改：增加一行 ---
+        self.main_frame.grid_rowconfigure((0,1,2,3,4,5,6), weight=1)
 
         # 1. 标题
         self.label_title = ctk.CTkLabel(master=self.main_frame, text="欢迎使用 NOS Launcher", font=("Microsoft YaHei", 20, "bold"), text_color="#ffffff")
@@ -74,7 +75,7 @@ class NOSLauncher(ctk.CTk):
         )
         self.launch_button.grid(row=3, column=0, pady=10)
 
-        # 4. 新增：打开插件文件夹按钮
+        # 4. 打开插件文件夹按钮 (位置调整至启动按钮下方)
         self.addons_button = ctk.CTkButton(
             master=self.main_frame,
             text="打开插件文件夹",
@@ -82,13 +83,15 @@ class NOSLauncher(ctk.CTk):
             height=35,
             corner_radius=15,
             font=("Microsoft YaHei", 13),
-            fg_color="#5a8ab5",  # 与启动按钮颜色一致
+            fg_color="#5a8ab5",
             hover_color="#4a7a9b",
             command=self.open_addons_folder
         )
-        self.addons_button.grid(row=4, column=0, pady=10)  # --- 修改：放置在新行 ---
+        # 初始隐藏，扫描成功后显示
+        self.addons_button.grid(row=4, column=0, pady=10)
+        self.addons_button.grid_remove() 
 
-        # 5. 新增：打开预设文件夹按钮
+        # 5. 打开预设文件夹按钮 (位置调整至插件按钮下方)
         self.presets_button = ctk.CTkButton(
             master=self.main_frame,
             text="打开预设文件夹",
@@ -96,13 +99,15 @@ class NOSLauncher(ctk.CTk):
             height=35,
             corner_radius=15,
             font=("Microsoft YaHei", 13),
-            fg_color="#5a8ab5",  # 与启动按钮颜色一致
+            fg_color="#5a8ab5",
             hover_color="#4a7a9b",
             command=self.open_presets_folder
         )
-        self.presets_button.grid(row=5, column=0, pady=10)  # --- 修改：放置在新行 ---
+        # 初始隐藏，扫描成功后显示
+        self.presets_button.grid(row=5, column=0, pady=10)
+        self.presets_button.grid_remove()
 
-        # 6. 设置按钮
+        # 6. 设置按钮 (行号调整)
         self.settings_button = ctk.CTkButton(
             master=self.main_frame,
             text="设置",
@@ -114,16 +119,16 @@ class NOSLauncher(ctk.CTk):
             hover_color="#4a5b6a",
             command=self.open_settings
         )
-        self.settings_button.grid(row=6, column=0, pady=10)  # --- 修改：调整行号 ---
+        self.settings_button.grid(row=6, column=0, pady=10)
 
-        # 7. 版本号
+        # 7. 版本号 (行号调整)
         self.version_label_bottom = ctk.CTkLabel(
             master=self.main_frame,
             text="NOS Launcher v1.0.0",
             font=("Microsoft YaHei", 10),
             text_color="#aaaaaa"
         )
-        self.version_label_bottom.grid(row=7, column=0, pady=(10, 20))  # --- 修改：调整行号 ---
+        self.version_label_bottom.grid(row=7, column=0, pady=(10, 20))
 
         # 在所有UI元素创建后，再加载配置
         self.load_config()
@@ -206,19 +211,50 @@ class NOSLauncher(ctk.CTk):
         y = int(self.winfo_y() + (self.winfo_height()/2) - 175)
         self.settings_window.geometry(f"500x350+{x}+{y}")
 
-        self.settings_window.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(self.settings_window, text="启动器设置", font=("Microsoft YaHei", 18, "bold")).grid(row=0, column=0, pady=20)
+        # 使用选项卡
+        self.tabview = ctk.CTkTabview(self.settings_window)
+        self.tabview.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
+        self.tabview.add("设置")
+        self.tabview.add("关于")
 
-        self.path_display = ctk.CTkEntry(self.settings_window, width=400, height=35, placeholder_text="请输入或选择游戏根目录")
+        # 设置标签页
+        self.setup_settings_tab()
+        # 关于标签页
+        self.setup_about_tab()
+
+    def setup_settings_tab(self):
+        settings_frame = self.tabview.tab("设置")
+        settings_frame.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(settings_frame, text="启动器设置", font=("Microsoft YaHei", 18, "bold")).grid(row=0, column=0, pady=20)
+
+        self.path_display = ctk.CTkEntry(settings_frame, width=400, height=35, placeholder_text="请输入或选择游戏根目录")
         self.path_display.grid(row=1, column=0, pady=5, padx=20)
         if self.game_root_path: self.path_display.insert(0, self.game_root_path)
 
-        btn_frame = ctk.CTkFrame(self.settings_window, fg_color="transparent")
+        btn_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
         btn_frame.grid(row=2, column=0, pady=15)
         ctk.CTkButton(btn_frame, text="浏览...", width=100, command=self.browse_folder).pack(side="left", padx=10)
         ctk.CTkButton(btn_frame, text="保存路径", width=100, fg_color="#28a745", hover_color="#218838", command=self.save_manual_path).pack(side="left", padx=10)
 
-        ctk.CTkLabel(self.settings_window, text="只有包含 'Among Us.exe' 的子文件夹才会显示在版本列表中", text_color="gray", font=("Microsoft YaHei", 11)).grid(row=3, column=0, pady=10)
+        ctk.CTkLabel(settings_frame, text="只有包含完整文件的版本才会显示在列表中", text_color="gray", font=("Microsoft YaHei", 11)).grid(row=3, column=0, pady=10)
+
+    def setup_about_tab(self):
+        about_frame = self.tabview.tab("关于")
+        about_frame.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(about_frame, text="关于 NOS Launcher", font=("Microsoft YaHei", 18, "bold")).grid(row=0, column=0, pady=20)
+        ctk.CTkLabel(about_frame, text="绿林Greenwoo制作", font=("Microsoft YaHei", 16, "bold")).grid(row=1, column=0, pady=10)
+        
+        link_label = ctk.CTkLabel(
+            about_frame, 
+            text="GitHub项目链接", 
+            font=("Microsoft YaHei", 14),
+            text_color="#5a8ab5",
+            cursor="hand2"
+        )
+        link_label.grid(row=2, column=0, pady=10)
+        link_label.bind("<Button-1>", lambda e: webbrowser.open("https://github.com/MHW-YTT/NOS_Launcher"))
 
     def browse_folder(self):
         selected_path = filedialog.askdirectory(title="选择游戏根目录")
@@ -256,21 +292,37 @@ class NOSLauncher(ctk.CTk):
                 full_path = os.path.join(self.game_root_path, item)
                 if os.path.isdir(full_path):
                     exe_path = os.path.join(full_path, "Among Us.exe")
-                    if os.path.exists(exe_path):
+                    
+                    # --- 新增：检查 Addons、Presets 文件夹和 NebulaLog.txt 文件 ---
+                    addons_path = os.path.join(full_path, "Addons")
+                    presets_path = os.path.join(full_path, "Presets") # 注意：根据上下文使用Presets，您提到的Presents如果是拼写错误则此处不改
+                    log_path = os.path.join(full_path, "NebulaLog.txt")
+
+                    # 只有当 exe、Addons、Presets、NebulaLog.txt 全部存在时，才视为有效版本
+                    if (os.path.exists(exe_path) and 
+                        os.path.isdir(addons_path) and 
+                        os.path.isdir(presets_path) and 
+                        os.path.exists(log_path)):
                         versions.append(item)
 
             if versions:
                 self.current_versions = sorted(versions)
                 self.version_combobox.configure(values=self.current_versions)
                 self.version_combobox.set(self.current_versions[0])
+                # 显示按钮
+                self.addons_button.grid()
+                self.presets_button.grid()
                 if show_msg:
                     messagebox.showinfo("成功", f"扫描完成，找到 {len(versions)} 个有效游戏版本。")
             else:
                 self.current_versions = []
                 self.version_combobox.configure(values=["未找到有效版本"])
                 self.version_combobox.set("未找到有效版本")
+                # 隐藏按钮
+                self.addons_button.grid_remove()
+                self.presets_button.grid_remove()
                 if show_msg:
-                    messagebox.showwarning("警告", "选中的文件夹内没有包含 'Among Us.exe' 的子文件夹。")
+                    messagebox.showwarning("警告", "未找到包含完整文件的游戏版本。")
 
         except Exception as e:
             messagebox.showerror("错误", f"扫描文件夹时出错：{e}")
@@ -324,35 +376,29 @@ class NOSLauncher(ctk.CTk):
         """打开插件文件夹"""
         selected_version = self.version_combobox.get()
         if not self.game_root_path or selected_version == "请先在设置中添加文件夹" or selected_version == "未找到有效版本":
-            messagebox.showwarning("提示", "请先在设置中添加有效的游戏文件夹并选择一个版本！")
+            messagebox.showwarning("提示", "请先选择有效的游戏版本！")
             return
             
         addons_path = os.path.join(self.game_root_path, selected_version, "Addons")
-        if os.path.isdir(addons_path):
-            try:
-                # 使用文件资源管理器打开文件夹
-                subprocess.Popen(f'explorer "{addons_path}"')
-            except Exception as e:
-                messagebox.showerror("错误", f"无法打开文件夹：\n{e}")
-        else:
-            messagebox.showwarning("提示", f"插件文件夹不存在：\n{addons_path}")
+        # 因为扫描逻辑已经保证文件夹存在，这里直接打开
+        try:
+            subprocess.Popen(f'explorer "{addons_path}"')
+        except Exception as e:
+            messagebox.showerror("错误", f"无法打开文件夹：\n{e}")
 
     def open_presets_folder(self):
         """打开预设文件夹"""
         selected_version = self.version_combobox.get()
         if not self.game_root_path or selected_version == "请先在设置中添加文件夹" or selected_version == "未找到有效版本":
-            messagebox.showwarning("提示", "请先在设置中添加有效的游戏文件夹并选择一个版本！")
+            messagebox.showwarning("提示", "请先选择有效的游戏版本！")
             return
             
         presets_path = os.path.join(self.game_root_path, selected_version, "Presets")
-        if os.path.isdir(presets_path):
-            try:
-                # 使用文件资源管理器打开文件夹
-                subprocess.Popen(f'explorer "{presets_path}"')
-            except Exception as e:
-                messagebox.showerror("错误", f"无法打开文件夹：\n{e}")
-        else:
-            messagebox.showwarning("提示", f"预设文件夹不存在：\n{presets_path}")
+        # 因为扫描逻辑已经保证文件夹存在，这里直接打开
+        try:
+            subprocess.Popen(f'explorer "{presets_path}"')
+        except Exception as e:
+            messagebox.showerror("错误", f"无法打开文件夹：\n{e}")
 
 if __name__ == "__main__":
     app = NOSLauncher()
