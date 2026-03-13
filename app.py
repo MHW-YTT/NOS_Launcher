@@ -3,6 +3,7 @@ import os
 import json
 import subprocess
 import winreg
+import hashlib
 from PIL import Image
 from tkinter import filedialog, messagebox
 import webbrowser
@@ -14,14 +15,108 @@ import threading
 ctk.set_appearance_mode("Light")
 ctk.set_default_color_theme("blue")
 
+
+class DownloadWindow(ctk.CTkToplevel):
+    """下载进度窗口"""
+    def __init__(self, parent, title="下载中"):
+        super().__init__(parent)
+        self.title(title)
+        self.geometry("500x400")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+        
+        self.configure(fg_color="#2b2b2b")
+        
+        # 居中显示
+        self.update_idletasks()
+        x = int(parent.winfo_x() + (parent.winfo_width()/2) - 250)
+        y = int(parent.winfo_y() + (parent.winfo_height()/2) - 200)
+        self.geometry(f"500x400+{x}+{y}")
+        
+        # 日志区域
+        self.log_frame = ctk.CTkFrame(self, fg_color="#1a1a1a", corner_radius=10)
+        self.log_frame.pack(fill="both", expand=True, padx=15, pady=(15, 5))
+        
+        self.log_textbox = ctk.CTkTextbox(
+            self.log_frame, 
+            width=450, 
+            height=280,
+            font=("Consolas", 11),
+            fg_color="#1a1a1a",
+            text_color="#00ff00"
+        )
+        self.log_textbox.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # 进度条区域
+        self.progress_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.progress_frame.pack(fill="x", padx=15, pady=10)
+        
+        self.status_label = ctk.CTkLabel(
+            self.progress_frame, 
+            text="准备下载...", 
+            font=("Microsoft YaHei", 12),
+            text_color="#ffffff"
+        )
+        self.status_label.pack(anchor="w")
+        
+        self.progressbar = ctk.CTkProgressBar(
+            self.progress_frame,
+            width=450,
+            height=15,
+            corner_radius=7
+        )
+        self.progressbar.pack(fill="x", pady=5)
+        self.progressbar.set(0)
+        
+        # 关闭按钮（初始隐藏）
+        self.close_button = ctk.CTkButton(
+            self,
+            text="关闭",
+            width=100,
+            height=32,
+            corner_radius=8,
+            command=self.destroy
+        )
+        
+        self.download_complete = False
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        
+    def _on_close(self):
+        if self.download_complete:
+            self.destroy()
+        else:
+            messagebox.showwarning("提示", "下载正在进行中，请稍候...")
+    
+    def log(self, message):
+        """添加日志"""
+        self.log_textbox.configure(state="normal")
+        self.log_textbox.insert("end", message + "\n")
+        self.log_textbox.see("end")
+        self.log_textbox.configure(state="disabled")
+    
+    def set_progress(self, progress):
+        """设置进度"""
+        self.progressbar.set(progress)
+        
+    def set_status(self, status):
+        """设置状态"""
+        self.status_label.configure(text=status)
+        
+    def show_close_button(self):
+        """显示关闭按钮"""
+        self.close_button.pack(pady=10)
+        self.download_complete = True
+
+
 class NOSLauncher(ctk.CTk):
     def __init__(self):
         super().__init__()
 
         # 配置窗口
         self.title("NoS Launcher")
-        self.geometry("600x550") 
-        self.minsize(500, 450)
+        self.geometry("650x650") 
+        self.minsize(550, 550)
         
         self.configure(fg_color="#426666")
         self.eval('tk::PlaceWindow . center')
@@ -30,136 +125,536 @@ class NOSLauncher(ctk.CTk):
         self.game_root_path = "" 
         self.current_versions = []
         self.config_file = "config.json"
-        self.current_version = "1.0.0"  # 当前启动器版本
+        self.current_version = "2.2.0"  # 当前启动器版本
+        
+        # 插件版本记录
+        self.addon_versions = {}
         
         # 按钮显示配置（默认都显示）
         self.button_visibility = {
             "addons": True,    # 插件文件夹按钮
             "presets": True    # 预设文件夹按钮
         }
+        
+        # 当前页面
+        self.current_page = "launch"
 
         # 创建主容器
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(3, weight=1)
 
         # -------------------------------------------------------
-        # 顶部 Logo 区域
+        # 导航按钮栏 (最上方)
+        # -------------------------------------------------------
+        self.nav_frame = ctk.CTkFrame(master=self, fg_color="#426666", corner_radius=0)
+        self.nav_frame.grid(row=0, column=0, sticky="ew", padx=30, pady=(20, 10))
+        self.nav_frame.grid_columnconfigure((0, 1, 2), weight=1)
+
+        # 导航按钮 - 居中显示
+        self.nav_launch_btn = ctk.CTkButton(
+            self.nav_frame,
+            text="启动",
+            width=130,
+            height=36,
+            corner_radius=10,
+            font=("Microsoft YaHei", 14, "bold"),
+            fg_color="#5a8ab5",
+            hover_color="#4a7a9b",
+            command=lambda: self.switch_page("launch")
+        )
+        self.nav_launch_btn.grid(row=0, column=0, padx=5, pady=5)
+
+        self.nav_addon_btn = ctk.CTkButton(
+            self.nav_frame,
+            text="插件市场",
+            width=130,
+            height=36,
+            corner_radius=10,
+            font=("Microsoft YaHei", 14, "bold"),
+            fg_color="#5a6b7a",
+            hover_color="#4a5b6a",
+            command=lambda: self.switch_page("addon")
+        )
+        self.nav_addon_btn.grid(row=0, column=1, padx=5, pady=5)
+
+        self.nav_settings_btn = ctk.CTkButton(
+            self.nav_frame,
+            text="设置",
+            width=130,
+            height=36,
+            corner_radius=10,
+            font=("Microsoft YaHei", 14, "bold"),
+            fg_color="#5a6b7a",
+            hover_color="#4a5b6a",
+            command=lambda: self.switch_page("settings")
+        )
+        self.nav_settings_btn.grid(row=0, column=2, padx=5, pady=5)
+
+        # -------------------------------------------------------
+        # Logo 区域
         # -------------------------------------------------------
         self.logo_frame = ctk.CTkFrame(master=self, fg_color="#426666", corner_radius=0)
-        self.logo_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 5))
+        self.logo_frame.grid(row=1, column=0, sticky="ew", padx=30, pady=5)
         self.logo_frame.grid_columnconfigure(0, weight=1)
 
         self.load_logo()
 
         # -------------------------------------------------------
-        # 主体内容区域
+        # 分隔线
         # -------------------------------------------------------
-        self.main_frame = ctk.CTkFrame(master=self, corner_radius=20, border_width=2, border_color="#d0d0d0", fg_color="#425466")
-        self.main_frame.grid(row=1, column=0, padx=20, pady=(5, 20), sticky="nsew")
-        
-        self.main_frame.grid_columnconfigure(0, weight=1)
-        self.main_frame.grid_rowconfigure((0,1,2,3,4,5,6), weight=1)
+        self.separator = ctk.CTkFrame(master=self, height=2, fg_color="#5a7a8a")
+        self.separator.grid(row=2, column=0, sticky="ew", padx=50, pady=10)
 
-        # 1. 标题
-        self.label_title = ctk.CTkLabel(master=self.main_frame, text="欢迎使用 NoS Launcher", font=("Microsoft YaHei", 20, "bold"), text_color="#ffffff")
-        self.label_title.grid(row=0, column=0, pady=(30, 10))
+        # -------------------------------------------------------
+        # 内容区域
+        # -------------------------------------------------------
+        self.content_frame = ctk.CTkFrame(master=self, corner_radius=15, border_width=0, fg_color="#425466")
+        self.content_frame.grid(row=3, column=0, padx=30, pady=(0, 25), sticky="nsew")
+        self.content_frame.grid_columnconfigure(0, weight=1)
+        self.content_frame.grid_rowconfigure(0, weight=1)
 
-        # 2. 版本选择区域
-        self.version_label = ctk.CTkLabel(master=self.main_frame, text="当前游戏版本：", font=("Microsoft YaHei", 14), text_color="#ffffff")
-        self.version_label.grid(row=1, column=0, pady=(5, 5))
+        # 创建各页面
+        self.create_launch_page()
+        self.create_addon_page()
+        self.create_settings_page()
 
-        self.version_combobox = ctk.CTkOptionMenu(master=self.main_frame, values=["请先在设置中添加文件夹"], width=250, height=35, corner_radius=10, font=("Microsoft YaHei", 13), dynamic_resizing=False)
-        self.version_combobox.grid(row=2, column=0, pady=(0, 15))
-
-        # 3. 启动按钮
-        self.launch_button = ctk.CTkButton(
-            master=self.main_frame, 
-            text="启动游戏", 
-            width=250, 
-            height=45, 
-            corner_radius=20, 
-            font=("Microsoft YaHei", 16, "bold"), 
-            command=self.launch_game,
-            fg_color="#5a8ab5",
-            hover_color="#4a7a9b"
-        )
-        self.launch_button.grid(row=3, column=0, pady=10)
-
-        # 4. 打开插件文件夹按钮 (位置调整至启动按钮下方)
-        self.addons_button = ctk.CTkButton(
-            master=self.main_frame,
-            text="打开插件文件夹",
-            width=250,
-            height=35,
-            corner_radius=15,
-            font=("Microsoft YaHei", 13),
-            fg_color="#5a8ab5",
-            hover_color="#4a7a9b",
-            command=self.open_addons_folder
-        )
-        # 初始隐藏，扫描成功后显示
-        self.addons_button.grid(row=4, column=0, pady=10)
-        self.addons_button.grid_remove() 
-
-        # 5. 打开预设文件夹按钮 (位置调整至插件按钮下方)
-        self.presets_button = ctk.CTkButton(
-            master=self.main_frame,
-            text="打开预设文件夹",
-            width=250,
-            height=35,
-            corner_radius=15,
-            font=("Microsoft YaHei", 13),
-            fg_color="#5a8ab5",
-            hover_color="#4a7a9b",
-            command=self.open_presets_folder
-        )
-        # 初始隐藏，扫描成功后显示
-        self.presets_button.grid(row=5, column=0, pady=10)
-        self.presets_button.grid_remove()
-
-        # 6. 设置按钮 (行号调整)
-        self.settings_button = ctk.CTkButton(
-            master=self.main_frame,
-            text="设置",
-            width=150,
-            height=35,
-            corner_radius=15,
-            font=("Microsoft YaHei", 13),
-            fg_color="#5a6b7a",
-            hover_color="#4a5b6a",
-            command=self.open_settings
-        )
-        self.settings_button.grid(row=6, column=0, pady=10)
-
-        # 7. 版本号 (行号调整)
-        self.version_label_bottom = ctk.CTkLabel(
-            master=self.main_frame,
-            text=f"NoS Launcher {self.current_version}",
-            font=("Microsoft YaHei", 10),
-            text_color="#aaaaaa"
-        )
-        self.version_label_bottom.grid(row=7, column=0, pady=(10, 20))
+        # 默认显示启动页面
+        self.switch_page("launch")
 
         # 在所有UI元素创建后，再加载配置
         self.load_config()
         
         # 启动时自动检测更新
-        self.after(1000, self.check_update_on_startup)  # 延迟1秒后检测，避免阻塞启动
+        self.after(1000, self.check_update_on_startup)
 
+    def switch_page(self, page_name):
+        """切换页面"""
+        # 隐藏所有页面
+        self.launch_page.grid_remove()
+        self.addon_page.grid_remove()
+        self.settings_page.grid_remove()
+        
+        # 重置所有导航按钮颜色
+        self.nav_launch_btn.configure(fg_color="#5a6b7a")
+        self.nav_addon_btn.configure(fg_color="#5a6b7a")
+        self.nav_settings_btn.configure(fg_color="#5a6b7a")
+        
+        # 显示选中的页面并高亮对应按钮
+        if page_name == "launch":
+            self.launch_page.grid()
+            self.nav_launch_btn.configure(fg_color="#5a8ab5")
+        elif page_name == "addon":
+            self.addon_page.grid()
+            self.nav_addon_btn.configure(fg_color="#5a8ab5")
+            # 切换到插件市场时加载列表
+            self.load_addon_list()
+        elif page_name == "settings":
+            self.settings_page.grid()
+            self.nav_settings_btn.configure(fg_color="#5a8ab5")
+        
+        self.current_page = page_name
+
+    # ========================================================
+    # 启动页面
+    # ========================================================
+    def create_launch_page(self):
+        """创建启动页面"""
+        self.launch_page = ctk.CTkFrame(self.content_frame, fg_color="transparent")
+        self.launch_page.grid(row=0, column=0, sticky="nsew")
+        self.launch_page.grid_columnconfigure(0, weight=1)
+        self.launch_page.grid_rowconfigure((0,1,2,3,4,5,6), weight=1)
+
+        # 1. 标题
+        self.label_title = ctk.CTkLabel(
+            master=self.launch_page, 
+            text="欢迎使用 NoS Launcher", 
+            font=("Microsoft YaHei", 22, "bold"), 
+            text_color="#ffffff"
+        )
+        self.label_title.grid(row=0, column=0, pady=(25, 5))
+
+        # 2. 版本选择区域
+        self.version_label = ctk.CTkLabel(
+            master=self.launch_page, 
+            text="当前游戏版本：", 
+            font=("Microsoft YaHei", 14), 
+            text_color="#ffffff"
+        )
+        self.version_label.grid(row=1, column=0, pady=(10, 5))
+
+        self.version_combobox = ctk.CTkOptionMenu(
+            master=self.launch_page, 
+            values=["请先在设置中添加文件夹"], 
+            width=280, 
+            height=38, 
+            corner_radius=10, 
+            font=("Microsoft YaHei", 13), 
+            dynamic_resizing=False
+        )
+        self.version_combobox.grid(row=2, column=0, pady=(0, 15))
+
+        # 3. 启动按钮
+        self.launch_button = ctk.CTkButton(
+            master=self.launch_page, 
+            text="▶  启动游戏", 
+            width=280, 
+            height=48, 
+            corner_radius=12, 
+            font=("Microsoft YaHei", 16, "bold"), 
+            command=self.launch_game,
+            fg_color="#5a8ab5",
+            hover_color="#4a7a9b"
+        )
+        self.launch_button.grid(row=3, column=0, pady=12)
+
+        # 4. 打开插件文件夹按钮
+        self.addons_button = ctk.CTkButton(
+            master=self.launch_page,
+            text="打开插件文件夹",
+            width=280,
+            height=38,
+            corner_radius=10,
+            font=("Microsoft YaHei", 13),
+            fg_color="#5a8ab5",
+            hover_color="#4a7a9b",
+            command=self.open_addons_folder
+        )
+        self.addons_button.grid(row=4, column=0, pady=8)
+        self.addons_button.grid_remove() 
+
+        # 5. 打开预设文件夹按钮
+        self.presets_button = ctk.CTkButton(
+            master=self.launch_page,
+            text="打开预设文件夹",
+            width=280,
+            height=38,
+            corner_radius=10,
+            font=("Microsoft YaHei", 13),
+            fg_color="#5a8ab5",
+            hover_color="#4a7a9b",
+            command=self.open_presets_folder
+        )
+        self.presets_button.grid(row=5, column=0, pady=8)
+        self.presets_button.grid_remove()
+
+        # 6. 版本号
+        self.version_label_bottom = ctk.CTkLabel(
+            master=self.launch_page,
+            text=f"NoS Launcher {self.current_version}",
+            font=("Microsoft YaHei", 11),
+            text_color="#aaaaaa"
+        )
+        self.version_label_bottom.grid(row=6, column=0, pady=(15, 20))
+
+    # ========================================================
+    # 插件市场页面
+    # ========================================================
+    def create_addon_page(self):
+        """创建插件市场页面"""
+        self.addon_page = ctk.CTkFrame(self.content_frame, fg_color="transparent")
+        self.addon_page.grid(row=0, column=0, sticky="nsew")
+        self.addon_page.grid_columnconfigure(0, weight=1)
+        self.addon_page.grid_rowconfigure(1, weight=1)
+
+        # 标题区域
+        title_frame = ctk.CTkFrame(self.addon_page, fg_color="transparent")
+        title_frame.grid(row=0, column=0, pady=(15, 10), sticky="ew")
+        title_frame.grid_columnconfigure(0, weight=1)
+        
+        ctk.CTkLabel(
+            title_frame, 
+            text="插件市场", 
+            font=("Microsoft YaHei", 20, "bold"), 
+            text_color="#ffffff"
+        ).grid(row=0, column=0, pady=5)
+        
+        # 提示信息
+        self.addon_tip_label = ctk.CTkLabel(
+            title_frame, 
+            text="下载链接由绿林Greenwoo和帆船提供", 
+            font=("Microsoft YaHei", 11), 
+            text_color="#aaaaaa"
+        )
+        self.addon_tip_label.grid(row=1, column=0, pady=(0, 5))
+
+        # 插件列表容器
+        self.addon_list_frame = ctk.CTkScrollableFrame(
+            self.addon_page, 
+            width=550, 
+            height=320,
+            corner_radius=10
+        )
+        self.addon_list_frame.grid(row=1, column=0, padx=25, pady=5, sticky="nsew")
+        self.addon_list_frame.grid_columnconfigure(0, weight=1)
+
+        # 进度条区域
+        self.download_progress_frame = ctk.CTkFrame(self.addon_page, fg_color="transparent")
+        self.download_progress_frame.grid(row=2, column=0, padx=25, pady=15, sticky="ew")
+        self.download_progress_frame.grid_columnconfigure(0, weight=1)
+
+        # 下载状态标签
+        self.download_status_label = ctk.CTkLabel(
+            self.download_progress_frame, 
+            text="", 
+            font=("Microsoft YaHei", 12),
+            text_color="#aaaaaa"
+        )
+        self.download_status_label.grid(row=0, column=0, pady=(0, 5))
+
+        # 进度条
+        self.download_progressbar = ctk.CTkProgressBar(
+            self.download_progress_frame,
+            width=550,
+            height=14,
+            corner_radius=7
+        )
+        self.download_progressbar.grid(row=1, column=0, pady=2)
+        self.download_progressbar.set(0)
+        self.download_progressbar.grid_remove()
+
+    # ========================================================
+    # 设置页面
+    # ========================================================
+    def create_settings_page(self):
+        """创建设置页面"""
+        self.settings_page = ctk.CTkFrame(self.content_frame, fg_color="transparent")
+        self.settings_page.grid(row=0, column=0, sticky="nsew")
+        self.settings_page.grid_columnconfigure(0, weight=1)
+        self.settings_page.grid_rowconfigure(1, weight=1)
+
+        # 使用选项卡
+        self.settings_tabview = ctk.CTkTabview(
+            self.settings_page, 
+            width=550, 
+            height=380,
+            corner_radius=10
+        )
+        self.settings_tabview.grid(row=0, column=0, padx=25, pady=20, sticky="nsew")
+        self.settings_tabview.add("路径设置")
+        self.settings_tabview.add("更新")
+        self.settings_tabview.add("按钮显示")
+        self.settings_tabview.add("关于")
+
+        # 设置各标签页
+        self.setup_settings_path_tab()
+        self.setup_settings_update_tab()
+        self.setup_settings_buttons_tab()
+        self.setup_settings_about_tab()
+
+    def setup_settings_path_tab(self):
+        """路径设置标签页"""
+        settings_frame = self.settings_tabview.tab("路径设置")
+        settings_frame.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            settings_frame, 
+            text="游戏路径设置", 
+            font=("Microsoft YaHei", 18, "bold"), 
+            text_color="#333333"
+        ).grid(row=0, column=0, pady=20)
+
+        self.path_display = ctk.CTkEntry(
+            settings_frame, 
+            width=420, 
+            height=38, 
+            placeholder_text="请输入或选择游戏根目录",
+            corner_radius=10
+        )
+        self.path_display.grid(row=1, column=0, pady=5, padx=20)
+        if self.game_root_path: self.path_display.insert(0, self.game_root_path)
+
+        btn_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
+        btn_frame.grid(row=2, column=0, pady=18)
+        ctk.CTkButton(
+            btn_frame, 
+            text="浏览...", 
+            width=110, 
+            height=35,
+            corner_radius=10,
+            command=self.browse_folder
+        ).pack(side="left", padx=10)
+        ctk.CTkButton(
+            btn_frame, 
+            text="保存路径", 
+            width=110, 
+            height=35,
+            corner_radius=10,
+            fg_color="#28a745", 
+            hover_color="#218838", 
+            command=self.save_manual_path
+        ).pack(side="left", padx=10)
+
+        ctk.CTkLabel(
+            settings_frame, 
+            text="提示：检测到 BepInEx/nebula/Nebula.dll 的目录才会显示", 
+            text_color="#aaaaaa", 
+            font=("Microsoft YaHei", 11)
+        ).grid(row=3, column=0, pady=10)
+
+    def setup_settings_update_tab(self):
+        """更新标签页"""
+        update_frame = self.settings_tabview.tab("更新")
+        update_frame.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            update_frame, 
+            text="检查更新", 
+            font=("Microsoft YaHei", 18, "bold"), 
+            text_color="#333333"
+        ).grid(row=0, column=0, pady=15)
+        
+        # 启动器更新按钮
+        self.check_update_button = ctk.CTkButton(
+            update_frame,
+            text="检查启动器更新",
+            width=220,
+            height=40,
+            corner_radius=10,
+            font=("Microsoft YaHei", 14),
+            fg_color="#5a8ab5",
+            hover_color="#4a7a9b",
+            command=self.check_update
+        )
+        self.check_update_button.grid(row=1, column=0, pady=10)
+
+        ctk.CTkLabel(
+            update_frame, 
+            text=f"当前版本：{self.current_version}", 
+            font=("Microsoft YaHei", 12), 
+            text_color="#000000"
+        ).grid(row=2, column=0, pady=5)
+        
+        # 分隔线
+        ctk.CTkFrame(update_frame, height=2, fg_color="#5a7a8a").grid(row=3, column=0, sticky="ew", padx=50, pady=15)
+        
+        # NoS DLL 更新区域
+        ctk.CTkLabel(
+            update_frame, 
+            text="更新 NoS", 
+            font=("Microsoft YaHei", 16, "bold"), 
+            text_color="#333333"
+        ).grid(row=4, column=0, pady=10)
+        
+        # 版本类型选择
+        self.nos_version_type = ctk.CTkOptionMenu(
+            update_frame,
+            values=["release", "snapshot"],
+            width=150,
+            height=32,
+            corner_radius=8,
+            font=("Microsoft YaHei", 12)
+        )
+        self.nos_version_type.grid(row=5, column=0, pady=5)
+        self.nos_version_type.set("release")
+        
+        self.update_nos_button = ctk.CTkButton(
+            update_frame,
+            text="更新 NoS",
+            width=180,
+            height=38,
+            corner_radius=10,
+            font=("Microsoft YaHei", 13),
+            fg_color="#28a745",
+            hover_color="#218838",
+            command=self.check_nos_update
+        )
+        self.update_nos_button.grid(row=6, column=0, pady=10)
+
+    def setup_settings_buttons_tab(self):
+        """按钮显示标签页"""
+        buttons_frame = self.settings_tabview.tab("按钮显示")
+        buttons_frame.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            buttons_frame, 
+            text="主界面按钮显示设置", 
+            font=("Microsoft YaHei", 18, "bold"), 
+            text_color="#333333"
+        ).grid(row=0, column=0, pady=20)
+        
+        ctk.CTkLabel(
+            buttons_frame, 
+            text="选择要在启动页面上显示的按钮：", 
+            font=("Microsoft YaHei", 12), 
+            text_color="#000000"
+        ).grid(row=1, column=0, pady=(5, 15))
+
+        self.addons_checkbox = ctk.CTkCheckBox(
+            buttons_frame,
+            text="打开插件文件夹",
+            font=("Microsoft YaHei", 13),
+            checkbox_width=22,
+            checkbox_height=22,
+            corner_radius=5,
+            onvalue=True,
+            offvalue=False,
+            command=self.on_button_visibility_change
+        )
+        self.addons_checkbox.grid(row=2, column=0, pady=10)
+        self.addons_checkbox.select() if self.button_visibility["addons"] else self.addons_checkbox.deselect()
+
+        self.presets_checkbox = ctk.CTkCheckBox(
+            buttons_frame,
+            text="打开预设文件夹",
+            font=("Microsoft YaHei", 13),
+            checkbox_width=22,
+            checkbox_height=22,
+            corner_radius=5,
+            onvalue=True,
+            offvalue=False,
+            command=self.on_button_visibility_change
+        )
+        self.presets_checkbox.grid(row=3, column=0, pady=10)
+        self.presets_checkbox.select() if self.button_visibility["presets"] else self.presets_checkbox.deselect()
+
+        ctk.CTkLabel(
+            buttons_frame, 
+            text="更改后立即生效，设置会自动保存", 
+            text_color="#aaaaaa", 
+            font=("Microsoft YaHei", 11)
+        ).grid(row=4, column=0, pady=20)
+
+    def setup_settings_about_tab(self):
+        """关于标签页"""
+        about_frame = self.settings_tabview.tab("关于")
+        about_frame.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            about_frame, 
+            text="关于 NoS Launcher", 
+            font=("Microsoft YaHei", 18, "bold"), 
+            text_color="#333333"
+        ).grid(row=0, column=0, pady=20)
+        
+        ctk.CTkLabel(
+            about_frame, 
+            text="绿林Greenwoo制作", 
+            font=("Microsoft YaHei", 15, "bold"), 
+            text_color="#333333"
+        ).grid(row=1, column=0, pady=10)
+        
+        link_label = ctk.CTkLabel(
+            about_frame, 
+            text="GitHub项目链接", 
+            font=("Microsoft YaHei", 13),
+            text_color="#5a8ab5",
+            cursor="hand2"
+        )
+        link_label.grid(row=2, column=0, pady=10)
+        link_label.bind("<Button-1>", lambda e: webbrowser.open("https://github.com/MHW-YTT/NOS_Launcher"))
+
+    # ========================================================
+    # Logo 加载
+    # ========================================================
     def load_logo(self):
         try:
-            # 网络图片URL
-            logo_url = "https://ytt0.top/NOS_Launcher/re/nos.png"
-            
-            # 发送GET请求获取图片
+            logo_url = "https://auojplay.fanchuanovo.cn/NoS_Launcher/re/nos.png"
             response = requests.get(logo_url, timeout=5)
-            response.raise_for_status()  # 检查请求是否成功（如404、500等错误）
+            response.raise_for_status()
             
-            # 将响应内容转换为PIL Image对象
             pil_image = Image.open(BytesIO(response.content))
             
-            # 缩放处理
-            max_width = 400
+            max_width = 380
             original_width, original_height = pil_image.size
             
             if original_width > max_width:
@@ -170,50 +665,46 @@ class NOSLauncher(ctk.CTk):
                 new_width = original_width
                 new_height = original_height
             
-            # 创建CTkImage
             logo_image = ctk.CTkImage(
                 light_image=pil_image,
                 dark_image=pil_image,
                 size=(new_width, new_height)
             )
             
-            # 显示Logo
             self.logo_label = ctk.CTkLabel(
                 master=self.logo_frame,
                 image=logo_image,
                 text=""
             )
-            self.logo_label.grid(row=0, column=0, pady=20)
+            self.logo_label.grid(row=0, column=0, pady=5)
             self.logo_image = logo_image
             
-        except requests.exceptions.RequestException as e:
-            # 网络请求失败（如超时、404等）
-            print(f"从网络加载 Logo 失败: {e}")
-            self.show_text_logo("NoS Launcher")
         except Exception as e:
-            # 其他错误（如图片格式错误）
-            print(f"处理 Logo 时出错: {e}")
+            print(f"从网络加载 Logo 失败: {e}")
             self.show_text_logo("NoS Launcher")
 
     def show_text_logo(self, text):
         self.logo_label = ctk.CTkLabel(
             master=self.logo_frame,
             text=text,
-            font=("Microsoft YaHei", 32, "bold"),
+            font=("Microsoft YaHei", 28, "bold"),
             text_color="#ffffff"
         )
-        self.logo_label.grid(row=0, column=0, pady=20)
+        self.logo_label.grid(row=0, column=0, pady=5)
 
+    # ========================================================
+    # 配置加载/保存
+    # ========================================================
     def load_config(self):
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     config = json.load(f)
                     self.game_root_path = config.get("game_path", "")
-                    # 加载按钮显示配置
                     saved_visibility = config.get("button_visibility", {})
                     self.button_visibility["addons"] = saved_visibility.get("addons", True)
                     self.button_visibility["presets"] = saved_visibility.get("presets", True)
+                    self.addon_versions = config.get("addon_versions", {})
                 if self.game_root_path and os.path.isdir(self.game_root_path):
                     self.scan_game_versions(show_msg=False)
             except:
@@ -223,118 +714,152 @@ class NOSLauncher(ctk.CTk):
         try:
             config = {
                 "game_path": self.game_root_path,
-                "button_visibility": self.button_visibility
+                "button_visibility": self.button_visibility,
+                "addon_versions": self.addon_versions
             }
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(config, f, ensure_ascii=False, indent=4)
+            # 设置为隐藏文件
+            try:
+                os.system(f'attrib +h "{self.config_file}"')
+            except:
+                pass
         except:
             pass
 
-    def open_settings(self):
-        self.settings_window = ctk.CTkToplevel(self)
-        self.settings_window.title("设置")
-        self.settings_window.geometry("500x350")
-        self.settings_window.resizable(False, False)
-        # 使用 transient 让设置窗口保持在主窗口上方，但不置顶于所有窗口
-        self.settings_window.transient(self)
-        # 让设置窗口获得焦点
-        self.settings_window.focus_force()
-        # 抓取焦点，防止用户操作主窗口
-        self.settings_window.grab_set()
+    # ========================================================
+    # MD5 计算
+    # ========================================================
+    def calculate_md5(self, file_path):
+        """计算文件的MD5值"""
+        md5_hash = hashlib.md5()
+        try:
+            with open(file_path, 'rb') as f:
+                for chunk in iter(lambda: f.read(8192), b""):
+                    md5_hash.update(chunk)
+            return md5_hash.hexdigest()
+        except Exception as e:
+            return None
+
+    # ========================================================
+    # NoS DLL 更新功能
+    # ========================================================
+    def check_nos_update(self):
+        """检查NoS DLL更新"""
+        selected_version = self.version_combobox.get()
         
-        self.update_idletasks()
-        x = int(self.winfo_x() + (self.winfo_width()/2) - 250)
-        y = int(self.winfo_y() + (self.winfo_height()/2) - 175)
-        self.settings_window.geometry(f"500x350+{x}+{y}")
+        if not self.game_root_path or selected_version in ["请先在设置中添加文件夹", "未找到有效版本"]:
+            messagebox.showwarning("提示", "请先选择有效的游戏版本！")
+            return
+        
+        version_type = self.nos_version_type.get()
+        
+        # 获取本地DLL路径
+        local_dll_path = os.path.join(self.game_root_path, selected_version, "BepInEx", "nebula", "Nebula.dll")
+        
+        if not os.path.exists(local_dll_path):
+            messagebox.showerror("错误", "未找到 Nebula.dll 文件！")
+            return
+        
+        # 计算本地MD5
+        local_md5 = self.calculate_md5(local_dll_path)
+        
+        # 获取云端版本信息
+        try:
+            response = requests.get("https://auojplay.fanchuanovo.cn/NoS_Launcher/nos_dll/ver.json", timeout=10)
+            response.raise_for_status()
+            ver_data = response.json()
+            
+            # 获取对应类型的版本信息
+            type_data = ver_data.get(version_type, {})
+            cloud_md5 = type_data.get("md5", "")
+            download_url = type_data.get("url", "")
+            version_name = type_data.get("ver", "未知")
+            
+            if not cloud_md5 or not download_url:
+                messagebox.showerror("错误", "无法获取云端版本信息！")
+                return
+            
+            if local_md5 == cloud_md5:
+                messagebox.showinfo("提示", f"NoS 已是最新版本！\n版本类型: {version_type}\n版本号: {version_name}")
+            else:
+                result = messagebox.askyesno(
+                    "发现新版本", 
+                    f"检测到新版本！\n\n版本类型: {version_type}\n版本号: {version_name}\n\n是否立即更新？"
+                )
+                if result:
+                    self.download_nos_dll(download_url, local_dll_path, version_type, version_name)
+                    
+        except Exception as e:
+            messagebox.showerror("错误", f"检查更新失败：{e}")
 
-        # 使用选项卡 - 调整顺序：设置、更新、按钮选择、插件市场、关于
-        self.tabview = ctk.CTkTabview(self.settings_window, width=460, height=280)
-        self.tabview.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
-        self.tabview.add("设置")
-        self.tabview.add("更新")
-        self.tabview.add("按钮选择")
-        self.tabview.add("插件市场")  # 插件市场
-        self.tabview.add("关于")  # 关于调整到最后
+    def download_nos_dll(self, url, save_path, version_type, version_name):
+        """下载NoS DLL"""
+        download_window = DownloadWindow(self, f"更新 NoS ({version_type})")
+        download_window.log(f"版本类型: {version_type}")
+        download_window.log(f"版本号: {version_name}")
+        download_window.log(f"下载地址: {url}")
+        download_window.log(f"保存路径: {save_path}")
+        download_window.log("-" * 50)
+        download_window.set_status("正在连接服务器...")
+        
+        def download_thread():
+            try:
+                response = requests.get(url, stream=True, timeout=30)
+                response.raise_for_status()
+                
+                total_size = int(response.headers.get('content-length', 0))
+                downloaded = 0
+                
+                download_window.log(f"文件大小: {total_size / 1024:.2f} KB")
+                download_window.log("开始下载...")
+                
+                # 先下载到临时文件
+                temp_path = save_path + ".tmp"
+                
+                with open(temp_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total_size > 0:
+                                progress = downloaded / total_size
+                                download_window.after(0, lambda p=progress: download_window.set_progress(p))
+                                download_window.after(0, lambda d=downloaded, t=total_size: 
+                                    download_window.set_status(f"下载中... {d}/{t} bytes"))
+                
+                download_window.log("下载完成，正在替换文件...")
+                
+                # 替换原文件
+                if os.path.exists(save_path):
+                    os.remove(save_path)
+                os.rename(temp_path, save_path)
+                
+                download_window.log("文件替换成功！")
+                download_window.log("-" * 50)
+                download_window.set_status("更新完成！")
+                download_window.set_progress(1)
+                download_window.after(0, lambda: download_window.show_close_button())
+                download_window.after(0, lambda: messagebox.showinfo("成功", "NoS 更新成功！"))
+                
+            except Exception as e:
+                download_window.log(f"下载失败: {e}")
+                download_window.set_status(f"下载失败: {e}")
+                download_window.after(0, lambda: download_window.show_close_button())
+        
+        threading.Thread(target=download_thread, daemon=True).start()
 
-        # 设置标签页
-        self.setup_settings_tab()
-        # 更新标签页
-        self.setup_update_tab()
-        # 按钮选择标签页
-        self.setup_buttons_tab()
-        # 插件市场标签页
-        self.setup_addon_market_tab()
-        # 关于标签页（放最后）
-        self.setup_about_tab()
-
-    def setup_settings_tab(self):
-        settings_frame = self.tabview.tab("设置")
-        settings_frame.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(settings_frame, text="启动器设置", font=("Microsoft YaHei", 18, "bold")).grid(row=0, column=0, pady=20)
-
-        self.path_display = ctk.CTkEntry(settings_frame, width=400, height=35, placeholder_text="请输入或选择游戏根目录")
-        self.path_display.grid(row=1, column=0, pady=5, padx=20)
-        if self.game_root_path: self.path_display.insert(0, self.game_root_path)
-
-        btn_frame = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        btn_frame.grid(row=2, column=0, pady=15)
-        ctk.CTkButton(btn_frame, text="浏览...", width=100, command=self.browse_folder).pack(side="left", padx=10)
-        ctk.CTkButton(btn_frame, text="保存路径", width=100, fg_color="#28a745", hover_color="#218838", command=self.save_manual_path).pack(side="left", padx=10)
-
-        ctk.CTkLabel(settings_frame, text="只有包含完整文件的版本(运行过exe后)才会显示在列表中", text_color="gray", font=("Microsoft YaHei", 11)).grid(row=3, column=0, pady=10)
-
-    def setup_addon_market_tab(self):
-        """插件市场标签页"""
-        self.addon_market_frame = self.tabview.tab("插件市场")
-        self.addon_market_frame.grid_columnconfigure(0, weight=1)
-        self.addon_market_frame.grid_rowconfigure(1, weight=1)
-
-        # 标题
-        ctk.CTkLabel(self.addon_market_frame, text="插件市场", font=("Microsoft YaHei", 18, "bold")).grid(row=0, column=0, pady=(15, 10))
-
-        # 插件列表容器（使用 ScrollableFrame）
-        self.addon_list_frame = ctk.CTkScrollableFrame(self.addon_market_frame, width=420, height=180)
-        self.addon_list_frame.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
-        self.addon_list_frame.grid_columnconfigure(0, weight=1)
-
-        # 进度条区域
-        self.download_progress_frame = ctk.CTkFrame(self.addon_market_frame, fg_color="transparent")
-        self.download_progress_frame.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
-        self.download_progress_frame.grid_columnconfigure(0, weight=1)
-
-        # 下载状态标签
-        self.download_status_label = ctk.CTkLabel(
-            self.download_progress_frame, 
-            text="", 
-            font=("Microsoft YaHei", 11),
-            text_color="#aaaaaa"
-        )
-        self.download_status_label.grid(row=0, column=0, pady=(0, 2))
-
-        # 进度条
-        self.download_progressbar = ctk.CTkProgressBar(
-            self.download_progress_frame,
-            width=400,
-            height=15,
-            corner_radius=5
-        )
-        self.download_progressbar.grid(row=1, column=0, pady=2)
-        self.download_progressbar.set(0)
-        self.download_progressbar.grid_remove()  # 初始隐藏
-
-        # 加载插件列表
-        self.load_addon_list()
-
+    # ========================================================
+    # 插件市场功能
+    # ========================================================
     def load_addon_list(self):
         """加载插件列表"""
-        print("[加载插件列表] 开始...")
-        
-        # 清空现有列表
+        if not hasattr(self, 'addon_list_frame'):
+            return
+            
         for widget in self.addon_list_frame.winfo_children():
             widget.destroy()
 
-        # 显示加载中
         loading_label = ctk.CTkLabel(
             self.addon_list_frame, 
             text="正在加载插件列表...", 
@@ -343,36 +868,22 @@ class NOSLauncher(ctk.CTk):
         )
         loading_label.grid(row=0, column=0, pady=20)
 
-        # 在后台线程加载
-        print("[加载插件列表] 启动后台线程...")
         threading.Thread(target=self._fetch_addon_list, daemon=True).start()
 
     def _fetch_addon_list(self):
-        """后台获取插件列表"""
-        print("[获取插件列表] 开始获取...")
         try:
-            response = requests.get("https://ytt0.top/NOS_Launcher/addons/list.json", timeout=10)
+            response = requests.get("https://auojplay.fanchuanovo.cn/NoS_Launcher/addons/list.json", timeout=10)
             response.raise_for_status()
             addon_data = response.json()
-            print(f"[获取插件列表] 获取成功，共 {len(addon_data)} 个插件")
-            
-            # 在主线程更新UI
             self.after(0, lambda: self._display_addon_list(addon_data))
         except Exception as e:
-            error_msg = str(e)  # 立即捕获错误信息
-            print(f"[获取插件列表] 获取失败: {error_msg}")
+            error_msg = str(e)
             self.after(0, lambda: self._show_addon_list_error(error_msg))
 
     def _display_addon_list(self, addon_data):
-        """显示插件列表"""
-        print(f"[显示插件列表] 开始显示，数据: {addon_data}")
-        
-        # 检查控件是否存在
-        if not self._check_addon_widgets():
-            print("[显示插件列表] 控件检查失败，跳过显示")
+        if not hasattr(self, 'addon_list_frame'):
             return
             
-        # 清空现有列表
         for widget in self.addon_list_frame.winfo_children():
             widget.destroy()
 
@@ -385,87 +896,102 @@ class NOSLauncher(ctk.CTk):
             ).grid(row=0, column=0, pady=20)
             return
 
-        # 存储插件数据
         self.addon_data = addon_data
         
-        # 获取当前选中版本的 Addons 路径
         selected_version = self.version_combobox.get()
         addons_path = None
         if self.game_root_path and selected_version not in ["请先在设置中添加文件夹", "未找到有效版本"]:
             addons_path = os.path.join(self.game_root_path, selected_version, "Addons")
-            print(f"[显示插件列表] Addons路径: {addons_path}")
 
-        # 显示每个插件
-        for idx, (name, url) in enumerate(addon_data.items()):
-            print(f"[显示插件列表] 添加插件项: {name} -> {url}")
+        for idx, (name, info) in enumerate(addon_data.items()):
+            # 兼容旧格式和新格式
+            if isinstance(info, dict):
+                url = info.get("url", "")
+                cloud_version = info.get("ver", "")
+            else:
+                url = info
+                cloud_version = ""
             
-            # 从URL获取文件名
             filename = url.split("/")[-1]
             if not filename or not filename.lower().endswith('.zip'):
                 filename = f"{name}.zip"
             
-            # 检查是否已安装
             is_installed = False
+            need_update = False
             if addons_path and os.path.isdir(addons_path):
                 plugin_file = os.path.join(addons_path, filename)
                 is_installed = os.path.exists(plugin_file)
-                print(f"[显示插件列表] 检查文件 {plugin_file}: {'存在' if is_installed else '不存在'}")
+                
+                # 检查是否需要更新
+                if is_installed and cloud_version:
+                    local_version = self.addon_versions.get(name, "")
+                    need_update = local_version != cloud_version
             
             addon_item = ctk.CTkFrame(
                 self.addon_list_frame, 
-                fg_color="#b2c4ce", 
+                fg_color="#5a7a8a", 
                 corner_radius=10,
-                height=40
+                height=50
             )
-            addon_item.grid(row=idx, column=0, padx=5, pady=3, sticky="ew")
+            addon_item.grid(row=idx, column=0, padx=5, pady=5, sticky="ew")
             addon_item.grid_columnconfigure(0, weight=1)
             addon_item.grid_propagate(False)
 
-            # 插件名称
+            # 显示名称和版本
+            display_text = name
+            if cloud_version:
+                display_text = f"{name} (v{cloud_version})"
+            
             name_label = ctk.CTkLabel(
                 addon_item, 
-                text=name, 
-                font=("Microsoft YaHei", 12),
-                anchor="w"
+                text=display_text, 
+                font=("Microsoft YaHei", 13),
+                anchor="w",
+                text_color="#ffffff"
             )
-            name_label.grid(row=0, column=0, padx=15, pady=8, sticky="w")
+            name_label.grid(row=0, column=0, padx=18, pady=12, sticky="w")
 
-            # 下载按钮 - 根据安装状态显示不同文字和颜色
-            if is_installed:
+            if need_update:
+                download_btn = ctk.CTkButton(
+                    addon_item,
+                    text="更新",
+                    width=65,
+                    height=30,
+                    corner_radius=8,
+                    font=("Microsoft YaHei", 12),
+                    fg_color="#ffc107",
+                    hover_color="#e0a800",
+                    text_color="#000000",
+                    command=lambda n=name, u=url, v=cloud_version: self.download_addon_with_version(n, u, v)
+                )
+            elif is_installed:
                 download_btn = ctk.CTkButton(
                     addon_item,
                     text="已安装",
-                    width=70,
-                    height=26,
+                    width=75,
+                    height=30,
                     corner_radius=8,
-                    font=("Microsoft YaHei", 11),
+                    font=("Microsoft YaHei", 12),
                     fg_color="#6c757d",
                     hover_color="#5a6268",
-                    command=lambda n=name, u=url: self.download_addon(n, u)
+                    command=lambda n=name, u=url, v=cloud_version: self.download_addon_with_version(n, u, v)
                 )
             else:
                 download_btn = ctk.CTkButton(
                     addon_item,
                     text="下载",
-                    width=60,
-                    height=26,
+                    width=65,
+                    height=30,
                     corner_radius=8,
-                    font=("Microsoft YaHei", 11),
+                    font=("Microsoft YaHei", 12),
                     fg_color="#28a745",
                     hover_color="#218838",
-                    command=lambda n=name, u=url: self.download_addon(n, u)
+                    command=lambda n=name, u=url, v=cloud_version: self.download_addon_with_version(n, u, v)
                 )
-            download_btn.grid(row=0, column=1, padx=10, pady=7)
-        
-        print("[显示插件列表] 显示完成")
+            download_btn.grid(row=0, column=1, padx=12, pady=10)
 
     def _show_addon_list_error(self, error_msg):
-        """显示插件列表加载错误"""
-        print(f"[显示错误] 错误信息: {error_msg}")
-        
-        # 检查控件是否存在
-        if not self._check_addon_widgets():
-            print("[显示错误] 控件检查失败，跳过显示")
+        if not hasattr(self, 'addon_list_frame'):
             return
             
         for widget in self.addon_list_frame.winfo_children():
@@ -478,7 +1004,6 @@ class NOSLauncher(ctk.CTk):
             text_color="#ff6b6b"
         ).grid(row=0, column=0, pady=20)
 
-        # 重试按钮
         retry_btn = ctk.CTkButton(
             self.addon_list_frame,
             text="重试",
@@ -489,250 +1014,109 @@ class NOSLauncher(ctk.CTk):
             command=self.load_addon_list
         )
         retry_btn.grid(row=1, column=0, pady=10)
-        print("[显示错误] 错误界面显示完成")
 
-    def _check_addon_widgets(self):
-        """检查插件市场相关控件是否存在"""
-        try:
-            # 检查窗口是否存在
-            if not hasattr(self, 'settings_window'):
-                print("[检查控件] settings_window 属性不存在")
-                return False
-            if not self.settings_window.winfo_exists():
-                print("[检查控件] settings_window 窗口不存在")
-                return False
-            # 检查列表框架是否存在
-            if not hasattr(self, 'addon_list_frame'):
-                print("[检查控件] addon_list_frame 属性不存在")
-                return False
-            if not self.addon_list_frame.winfo_exists():
-                print("[检查控件] addon_list_frame 窗口不存在")
-                return False
-            print("[检查控件] 所有控件存在")
-            return True
-        except Exception as e:
-            print(f"[检查控件] 异常: {e}")
-            return False
+    def download_addon_with_version(self, addon_name, addon_url, cloud_version=""):
+        """带版本号的插件下载"""
+        selected_version = self.version_combobox.get()
+        
+        if not self.game_root_path or selected_version in ["请先在设置中添加文件夹", "未找到有效版本"]:
+            messagebox.showwarning("提示", "请先选择有效的游戏版本！")
+            return
+        
+        # 检查是否已是最新版本
+        if cloud_version:
+            local_version = self.addon_versions.get(addon_name, "")
+            if local_version == cloud_version:
+                result = messagebox.askyesno(
+                    "提示", 
+                    f"插件 {addon_name} 已是最新版本 (v{cloud_version})\n\n是否重新下载？"
+                )
+                if not result:
+                    return
+        
+        # 创建下载窗口
+        download_window = DownloadWindow(self, f"下载插件 - {addon_name}")
+        download_window.log(f"插件名称: {addon_name}")
+        if cloud_version:
+            download_window.log(f"版本号: {cloud_version}")
+        download_window.log(f"下载地址: {addon_url}")
+        download_window.log("-" * 50)
+        download_window.set_status("正在连接服务器...")
+        
+        def download_thread():
+            try:
+                addons_path = os.path.join(self.game_root_path, selected_version, "Addons")
+                if not os.path.isdir(addons_path):
+                    os.makedirs(addons_path)
+                    download_window.log(f"创建目录: {addons_path}")
+
+                filename = addon_url.split("/")[-1]
+                if not filename or not filename.lower().endswith('.zip'):
+                    filename = f"{addon_name}.zip"
+                
+                final_path = os.path.join(addons_path, filename)
+                download_window.log(f"保存路径: {final_path}")
+                
+                response = requests.get(addon_url, stream=True, timeout=30)
+                response.raise_for_status()
+
+                total_size = int(response.headers.get('content-length', 0))
+                downloaded = 0
+                
+                download_window.log(f"文件大小: {total_size / 1024:.2f} KB")
+                download_window.log("开始下载...")
+
+                with open(final_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total_size > 0:
+                                progress = downloaded / total_size
+                                download_window.after(0, lambda p=progress: download_window.set_progress(p))
+                                download_window.after(0, lambda d=downloaded, t=total_size: 
+                                    download_window.set_status(f"下载中... {d}/{t} bytes"))
+
+                download_window.log("下载完成！")
+                
+                # 保存版本信息
+                if cloud_version:
+                    self.addon_versions[addon_name] = cloud_version
+                    self.save_config()
+                    download_window.log(f"已记录版本: v{cloud_version}")
+                
+                download_window.log("-" * 50)
+                download_window.set_status("下载完成！")
+                download_window.set_progress(1)
+                download_window.after(0, lambda: download_window.show_close_button())
+                download_window.after(0, lambda: messagebox.showinfo("成功", f"插件 {addon_name} 下载成功！"))
+                
+                # 刷新插件列表
+                self.after(0, self.load_addon_list)
+                
+            except Exception as e:
+                download_window.log(f"下载失败: {e}")
+                download_window.set_status(f"下载失败: {e}")
+                download_window.after(0, lambda: download_window.show_close_button())
+        
+        threading.Thread(target=download_thread, daemon=True).start()
 
     def download_addon(self, addon_name, addon_url):
-        """下载插件"""
-        print(f"[下载] 开始下载插件: {addon_name}, URL: {addon_url}")
-        
-        # 检查是否选择了游戏版本
-        selected_version = self.version_combobox.get()
-        print(f"[下载] 选中的游戏版本: {selected_version}")
-        print(f"[下载] 游戏根路径: {self.game_root_path}")
-        
-        if not self.game_root_path or selected_version == "请先在设置中添加文件夹" or selected_version == "未找到有效版本":
-            print("[下载] 错误: 未选择有效的游戏版本")
-            messagebox.showwarning("提示", "请先在主界面选择有效的游戏版本！")
-            return
+        """兼容旧版下载方法"""
+        self.download_addon_with_version(addon_name, addon_url, "")
 
-        # 检查控件是否存在
-        if not self._check_addon_widgets():
-            print("[下载] 错误: 控件不存在")
-            return
-
-        # 显示进度条
-        try:
-            print("[下载] 显示进度条...")
-            self.download_progressbar.grid()
-            self.download_progressbar.set(0)
-            self.download_status_label.configure(text=f"正在下载：{addon_name}...")
-            print("[下载] 进度条显示成功")
-        except Exception as e:
-            print(f"[下载] 显示进度条失败: {e}")
-            return
-
-        # 在后台线程下载
-        print(f"[下载] 启动后台下载线程...")
-        threading.Thread(
-            target=self._download_addon_thread, 
-            args=(addon_name, addon_url, selected_version),
-            daemon=True
-        ).start()
-
-    def _download_addon_thread(self, addon_name, addon_url, selected_version):
-        """后台下载插件线程"""
-        print(f"[下载线程] 开始下载: {addon_name}")
-        try:
-            # 获取目标路径
-            addons_path = os.path.join(self.game_root_path, selected_version, "Addons")
-            print(f"[下载线程] 目标路径: {addons_path}")
-            
-            if not os.path.isdir(addons_path):
-                print(f"[下载线程] 创建目录: {addons_path}")
-                os.makedirs(addons_path)
-
-            # 从URL获取文件名
-            filename = addon_url.split("/")[-1]
-            print(f"[下载线程] URL文件名: {filename}")
-            
-            if not filename or not filename.lower().endswith('.zip'):
-                filename = f"{addon_name}.zip"
-                print(f"[下载线程] 使用默认文件名: {filename}")
-            
-            # 下载文件
-            print(f"[下载线程] 开始请求URL: {addon_url}")
-            response = requests.get(addon_url, stream=True, timeout=30)
-            response.raise_for_status()
-            print(f"[下载线程] HTTP响应状态码: {response.status_code}")
-
-            total_size = int(response.headers.get('content-length', 0))
-            print(f"[下载线程] 文件总大小: {total_size} bytes")
-            downloaded = 0
-
-            # 最终文件路径
-            final_path = os.path.join(addons_path, filename)
-            print(f"[下载线程] 最终保存路径: {final_path}")
-
-            with open(final_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if total_size > 0:
-                            progress = downloaded / total_size
-                            self.after(0, lambda p=progress: self._safe_set_progress(p))
-
-            print(f"[下载线程] 下载完成，共下载 {downloaded} bytes")
-
-            # 下载完成
-            print("[下载线程] 调用下载完成回调")
-            self.after(0, lambda: self._download_complete(addon_name))
-
-        except Exception as e:
-            error_msg = str(e)
-            print(f"[下载线程] 下载出错: {error_msg}")
-            import traceback
-            traceback.print_exc()
-            self.after(0, lambda: self._download_error(error_msg))
-
-    def _safe_set_progress(self, progress):
-        """安全设置进度条"""
-        try:
-            if self._check_addon_widgets() and hasattr(self, 'download_progressbar'):
-                self.download_progressbar.set(progress)
-                print(f"[进度] {progress*100:.1f}%")
-        except Exception as e:
-            print(f"[进度] 设置进度失败: {e}")
-
-    def _download_complete(self, addon_name):
-        """下载完成回调"""
-        print(f"[下载完成] {addon_name}")
-        try:
-            if self._check_addon_widgets():
-                self.download_progressbar.set(1)
-                self.download_status_label.configure(text=f"✓ {addon_name} 下载完成！", text_color="#28a745")
-                print("[下载完成] UI更新成功")
-                
-                # 显示下载成功提示窗口
-                messagebox.showinfo("下载完成", f"插件 {addon_name} 下载成功！\n已保存到 Addons 文件夹。")
-                
-                # 2秒后隐藏进度条
-                self.after(2000, self._hide_progress)
-            else:
-                print("[下载完成] 控件不存在，跳过UI更新")
-        except Exception as e:
-            print(f"[下载完成] UI更新失败: {e}")
-
-    def _download_error(self, error_msg):
-        """下载错误回调"""
-        print(f"[下载错误] {error_msg}")
-        try:
-            if self._check_addon_widgets():
-                self.download_progressbar.grid_remove()
-                self.download_status_label.configure(text=f"下载失败：{error_msg}", text_color="#ff6b6b")
-                print("[下载错误] UI更新成功")
-            else:
-                print("[下载错误] 控件不存在，跳过UI更新")
-        except Exception as e:
-            print(f"[下载错误] UI更新失败: {e}")
-
-    def _hide_progress(self):
-        """隐藏进度条"""
-        print("[隐藏进度条]")
-        try:
-            if self._check_addon_widgets():
-                self.download_progressbar.grid_remove()
-                self.download_status_label.configure(text="", text_color="#aaaaaa")
-                print("[隐藏进度条] 成功")
-        except Exception as e:
-            print(f"[隐藏进度条] 失败: {e}")
-
-    def setup_about_tab(self):
-        about_frame = self.tabview.tab("关于")
-        about_frame.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(about_frame, text="关于 NoS Launcher", font=("Microsoft YaHei", 18, "bold")).grid(row=0, column=0, pady=20)
-        ctk.CTkLabel(about_frame, text="绿林Greenwoo制作", font=("Microsoft YaHei", 16, "bold")).grid(row=1, column=0, pady=10)
-        
-        link_label = ctk.CTkLabel(
-            about_frame, 
-            text="GitHub项目链接", 
-            font=("Microsoft YaHei", 14),
-            text_color="#5a8ab5",
-            cursor="hand2"
-        )
-        link_label.grid(row=2, column=0, pady=10)
-        link_label.bind("<Button-1>", lambda e: webbrowser.open("https://github.com/MHW-YTT/NOS_Launcher"))
-
-    def setup_buttons_tab(self):
-        """按钮选择标签页"""
-        buttons_frame = self.tabview.tab("按钮选择")
-        buttons_frame.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(buttons_frame, text="主界面按钮显示设置", font=("Microsoft YaHei", 18, "bold")).grid(row=0, column=0, pady=20)
-        
-        # 提示文字
-        ctk.CTkLabel(buttons_frame, text="选择要在主界面上显示的按钮：", font=("Microsoft YaHei", 12), text_color="#000000").grid(row=1, column=0, pady=(5, 15))
-
-        # 插件文件夹按钮复选框
-        self.addons_checkbox = ctk.CTkCheckBox(
-            buttons_frame,
-            text="打开插件文件夹",
-            font=("Microsoft YaHei", 13),
-            checkbox_width=20,
-            checkbox_height=20,
-            onvalue=True,
-            offvalue=False,
-            command=self.on_button_visibility_change
-        )
-        self.addons_checkbox.grid(row=2, column=0, pady=8)
-        self.addons_checkbox.select() if self.button_visibility["addons"] else self.addons_checkbox.deselect()
-
-        # 预设文件夹按钮复选框
-        self.presets_checkbox = ctk.CTkCheckBox(
-            buttons_frame,
-            text="打开预设文件夹",
-            font=("Microsoft YaHei", 13),
-            checkbox_width=20,
-            checkbox_height=20,
-            onvalue=True,
-            offvalue=False,
-            command=self.on_button_visibility_change
-        )
-        self.presets_checkbox.grid(row=3, column=0, pady=8)
-        self.presets_checkbox.select() if self.button_visibility["presets"] else self.presets_checkbox.deselect()
-
-        # 说明文字
-        ctk.CTkLabel(buttons_frame, text="更改后立即生效，设置会自动保存", text_color="gray", font=("Microsoft YaHei", 11)).grid(row=4, column=0, pady=20)
-
+    # ========================================================
+    # 其他功能
+    # ========================================================
     def on_button_visibility_change(self):
-        """按钮可见性改变时的回调"""
-        # 更新配置
-        self.button_visibility["addons"] = self.addons_checkbox.get()
-        self.button_visibility["presets"] = self.presets_checkbox.get()
-        
-        # 保存配置
+        if hasattr(self, 'addons_checkbox'):
+            self.button_visibility["addons"] = self.addons_checkbox.get()
+        if hasattr(self, 'presets_checkbox'):
+            self.button_visibility["presets"] = self.presets_checkbox.get()
         self.save_config()
-        
-        # 立即更新主界面按钮显示
         self.update_main_buttons_visibility()
 
     def update_main_buttons_visibility(self):
-        """更新主界面按钮的显示状态"""
-        # 只有在有效版本扫描成功后才应用按钮可见性
         if self.current_versions:
             if self.button_visibility["addons"]:
                 self.addons_button.grid()
@@ -744,29 +1128,6 @@ class NOSLauncher(ctk.CTk):
             else:
                 self.presets_button.grid_remove()
 
-    def setup_update_tab(self):
-        update_frame = self.tabview.tab("更新")
-        update_frame.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(update_frame, text="检查更新", font=("Microsoft YaHei", 18, "bold")).grid(row=0, column=0, pady=20)
-        
-        # 检查更新按钮
-        self.check_update_button = ctk.CTkButton(
-            update_frame,
-            text="检查更新",
-            width=200,
-            height=35,
-            corner_radius=15,
-            font=("Microsoft YaHei", 13),
-            fg_color="#5a8ab5",
-            hover_color="#4a7a9b",
-            command=self.check_update
-        )
-        self.check_update_button.grid(row=1, column=0, pady=20)
-
-        # 当前版本信息
-        ctk.CTkLabel(update_frame, text=f"当前版本：{self.current_version}", font=("Microsoft YaHei", 12), text_color="#000000").grid(row=2, column=0, pady=5)
-
     def browse_folder(self):
         selected_path = filedialog.askdirectory(title="选择游戏根目录")
         if selected_path:
@@ -776,8 +1137,10 @@ class NOSLauncher(ctk.CTk):
 
     def save_manual_path(self):
         path = self.path_display.get().strip()
-        if path: self.apply_path_change(path)
-        else: messagebox.showwarning("提示", "路径不能为空！")
+        if path: 
+            self.apply_path_change(path)
+        else: 
+            messagebox.showwarning("提示", "路径不能为空！")
 
     def apply_path_change(self, path):
         if not os.path.isdir(path):
@@ -786,7 +1149,6 @@ class NOSLauncher(ctk.CTk):
         self.game_root_path = path
         self.save_config()
         self.scan_game_versions(show_msg=True)
-        if self.current_versions: self.settings_window.destroy()
 
     def scan_game_versions(self, show_msg=True):
         if not hasattr(self, 'version_combobox') or not self.version_combobox:
@@ -802,25 +1164,14 @@ class NOSLauncher(ctk.CTk):
             for item in all_items:
                 full_path = os.path.join(self.game_root_path, item)
                 if os.path.isdir(full_path):
-                    exe_path = os.path.join(full_path, "Among Us.exe")
-                    
-                    # 检查 Addons、Presets 文件夹和 NebulaLog.txt 文件
-                    addons_path = os.path.join(full_path, "Addons")
-                    presets_path = os.path.join(full_path, "Presets")
-                    log_path = os.path.join(full_path, "NebulaLog.txt")
-
-                    # 只有当 exe、Addons、Presets、NebulaLog.txt 全部存在时，才视为有效版本
-                    if (os.path.exists(exe_path) and 
-                        os.path.isdir(addons_path) and 
-                        os.path.isdir(presets_path) and 
-                        os.path.exists(log_path)):
+                    nebula_dll_path = os.path.join(full_path, "BepInEx", "nebula", "Nebula.dll")
+                    if os.path.exists(nebula_dll_path):
                         versions.append(item)
 
             if versions:
                 self.current_versions = sorted(versions)
                 self.version_combobox.configure(values=self.current_versions)
                 self.version_combobox.set(self.current_versions[0])
-                # 根据配置显示按钮
                 self.update_main_buttons_visibility()
                 if show_msg:
                     messagebox.showinfo("成功", f"扫描完成，找到 {len(versions)} 个有效游戏版本。")
@@ -828,7 +1179,6 @@ class NOSLauncher(ctk.CTk):
                 self.current_versions = []
                 self.version_combobox.configure(values=["未找到有效版本"])
                 self.version_combobox.set("未找到有效版本")
-                # 隐藏按钮
                 self.addons_button.grid_remove()
                 self.presets_button.grid_remove()
                 if show_msg:
@@ -855,7 +1205,7 @@ class NOSLauncher(ctk.CTk):
     def launch_game(self):
         selected_version = self.version_combobox.get()
         
-        if not self.game_root_path or selected_version == "请先在设置中添加文件夹" or selected_version == "未找到有效版本":
+        if not self.game_root_path or selected_version in ["请先在设置中添加文件夹", "未找到有效版本"]:
             messagebox.showwarning("提示", "请先在设置中添加有效的游戏文件夹！")
             return
             
@@ -883,14 +1233,12 @@ class NOSLauncher(ctk.CTk):
             messagebox.showerror("启动失败", f"启动游戏时发生错误：\n{e}")
 
     def open_addons_folder(self):
-        """打开插件文件夹"""
         selected_version = self.version_combobox.get()
-        if not self.game_root_path or selected_version == "请先在设置中添加文件夹" or selected_version == "未找到有效版本":
+        if not self.game_root_path or selected_version in ["请先在设置中添加文件夹", "未找到有效版本"]:
             messagebox.showwarning("提示", "请先选择有效的游戏版本！")
             return
             
         addons_path = os.path.join(self.game_root_path, selected_version, "Addons")
-        # 使用os.startfile直接打开文件夹（更可靠）
         if os.path.isdir(addons_path):
             try:
                 os.startfile(addons_path)
@@ -900,14 +1248,12 @@ class NOSLauncher(ctk.CTk):
             messagebox.showwarning("提示", f"插件文件夹不存在：\n{addons_path}")
 
     def open_presets_folder(self):
-        """打开预设文件夹"""
         selected_version = self.version_combobox.get()
-        if not self.game_root_path or selected_version == "请先在设置中添加文件夹" or selected_version == "未找到有效版本":
+        if not self.game_root_path or selected_version in ["请先在设置中添加文件夹", "未找到有效版本"]:
             messagebox.showwarning("提示", "请先选择有效的游戏版本！")
             return
             
         presets_path = os.path.join(self.game_root_path, selected_version, "Presets")
-        # 使用os.startfile直接打开文件夹（更可靠）
         if os.path.isdir(presets_path):
             try:
                 os.startfile(presets_path)
@@ -917,62 +1263,45 @@ class NOSLauncher(ctk.CTk):
             messagebox.showwarning("提示", f"预设文件夹不存在：\n{presets_path}")
 
     def check_update(self):
-        """检查更新"""
         try:
-            # 从网络获取更新信息
-            response = requests.get("https://ytt0.top/NOS_Launcher/update.json", timeout=5)
+            response = requests.get("https://auojplay.fanchuanovo.cn/NoS_Launcher/update.json", timeout=5)
             response.raise_for_status()
             update_data = response.json()
             
-            # 获取最新版本和下载链接
             latest_version = update_data.get("ver", "")
             download_url = update_data.get("dl", "")
             
-            # 比较版本（简单字符串比较，假设版本格式为v1.0.0）
             if latest_version and latest_version > self.current_version:
-                # 有新版本，询问是否下载
                 result = messagebox.askyesno(
                     "发现新版本", 
                     f"检测到新版本 {latest_version}\n是否立即下载更新？"
                 )
                 if result:
-                    # 打开下载链接
                     webbrowser.open(download_url)
             else:
                 messagebox.showinfo("检查更新", "当前已是最新版本")
                 
-        except requests.exceptions.RequestException as e:
-            messagebox.showerror("检查更新失败", f"无法连接到更新服务器：\n{e}")
         except Exception as e:
             messagebox.showerror("检查更新失败", f"检查更新时出错：\n{e}")
 
     def check_update_on_startup(self):
-        """启动时静默检测更新（只在有新版本时提示）"""
         try:
-            # 从网络获取更新信息
-            response = requests.get("https://ytt0.top/NOS_Launcher/update.json", timeout=5)
+            response = requests.get("https://auojplay.fanchuanovo.cn/NoS_Launcher/update.json", timeout=5)
             response.raise_for_status()
             update_data = response.json()
             
-            # 获取最新版本和下载链接
             latest_version = update_data.get("ver", "")
             download_url = update_data.get("dl", "")
             
-            # 比较版本，只在有新版本时提示
             if latest_version and latest_version > self.current_version:
-                # 有新版本，询问是否下载
                 result = messagebox.askyesno(
                     "发现新版本", 
                     f"检测到新版本 {latest_version}\n当前版本：{self.current_version}\n\n是否立即下载更新？"
                 )
                 if result:
-                    # 打开下载链接
                     webbrowser.open(download_url)
-            # 如果是最新版本，启动时不提示，静默通过
-                
-        except Exception as e:
-            # 启动时检测失败不显示错误，静默处理
-            print(f"启动时检查更新失败: {e}")
+        except:
+            pass
 
 if __name__ == "__main__":
     app = NOSLauncher()
